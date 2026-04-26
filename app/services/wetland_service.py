@@ -184,7 +184,7 @@ def get_wetlands_overview(user_id=None):
         # Usamos el código del sensor (ej. 'PH', 'TEMP') como llave para evitar duplicados
         if row.sensor_code not in wetlands[w_id]["sensors"] and len(wetlands[w_id]["sensors"]) < 3:
             wetlands[w_id]["sensors"][row.sensor_code] = {
-                "value": row.data_history_value,
+                "value": round(row.data_history_value, 2),
                 "name": row.sensor_name,
                 "unity": row.type_sensor_unity,
                 "max": row.type_sensor_max,
