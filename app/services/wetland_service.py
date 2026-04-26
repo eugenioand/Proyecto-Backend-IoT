@@ -156,31 +156,39 @@ def delete_wetland(data):
 
 
 def get_wetlands_overview(user_id=None):
-    
-    query= get_wetlands_details(is_latest=True, user_id=user_id)
+    # Obtenemos la query con el filtro de últimos datos activado
+    query = get_wetlands_details(is_latest=True, user_id=user_id)
 
-    # Procesar y estructurar los resultados
     wetlands = {}
+    
     for row in query:
-        wetland_id = row.wetland_id
-        if wetland_id not in wetlands:
-            wetlands[wetland_id] = {
-                "wetland_id": row.wetland_id,
+        w_id = row.wetland_id
+        
+        # Inicializar humedal si no existe en el diccionario
+        if w_id not in wetlands:
+            wetlands[w_id] = {
+                "wetland_id": w_id,
                 "name": row.wetland_name,
                 "status": row.wetland_status,
                 "location": row.wetland_location,
                 "sensors": {},
                 "last_updated": row.register_date
             }
-            
+        
+        # Actualizar la fecha global del humedal si este sensor es más reciente
+        if row.register_date and (wetlands[w_id]["last_updated"] is None or 
+                                  row.register_date > wetlands[w_id]["last_updated"]):
+            wetlands[w_id]["last_updated"] = row.register_date
 
-        if len(wetlands[wetland_id]["sensors"]) < 3:
-            
-            wetlands[wetland_id]["sensors"][row.sensor_code] = {
+        # Agregar sensores (limitado a 3 tipos distintos por humedal)
+        # Usamos el código del sensor (ej. 'PH', 'TEMP') como llave para evitar duplicados
+        if row.sensor_code not in wetlands[w_id]["sensors"] and len(wetlands[w_id]["sensors"]) < 3:
+            wetlands[w_id]["sensors"][row.sensor_code] = {
                 "value": row.data_history_value,
                 "name": row.sensor_name,
                 "unity": row.type_sensor_unity,
-                "max": row.type_sensor_max
+                "max": row.type_sensor_max,
+                "sensor_id": row.sensor_id # Útil para depuración
             }
 
     return ok_message(data=list(wetlands.values()))
@@ -259,69 +267,71 @@ def get_wetlands_overview_details(wetland_id=None, node_id=None):
         return not_found_message(details=str(err))
     
 
-def get_wetlands_details(wetland_id=None, node_id=None,sensor_id=None, user_id= None,is_latest=False):
-    # Crear una subconsulta con un alias explícito para obtener la última actualización de cada sensor
-    latest = (
+def get_wetlands_details(wetland_id=None, node_id=None, sensor_id=None, user_id=None, is_latest=False):
+    # 1. Subconsulta para encontrar la fecha máxima por sensor
+    # Usamos register_date como referencia de "lo más reciente"
+    latest_subquery = (
         db.session.query(
-            DataHistory.sensor_id.label("sensor_id"),
-            db.func.max(DataHistory.updated_at).label("latest_update")
+            DataHistory.sensor_id.label("s_id"),
+            db.func.max(DataHistory.register_date).label("max_reg")
         )
         .group_by(DataHistory.sensor_id)
-        .subquery(name="latest")  # Asignamos el alias explícito "latest" a la subconsulta
+        .subquery()
     )
-    
 
-    # Consulta principal
-    query = (
-        db.session.query(
-            Wetland.wetland_id.label("wetland_id"),
-            Wetland.name.label("wetland_name"),
-            Wetland.location.label("wetland_location"),
-            Wetland.status.label("wetland_status"),
-            Sensor.sensor_id.label("sensor_id"),
-            Sensor.name.label("name_sensor"),
-            Node.node_id.label("node_id"),
-            Node.name.label("node_name"),
-            Node.location.label("node_location"),
-            DataHistory.value.label("data_history_value"),
-            func.timezone('America/Bogota',DataHistory.updated_at).label("last_updated"),
-            func.timezone('America/Bogota',DataHistory.register_date).label("register_date"),
-            TypeSensor.code.label("sensor_code"),
-            Node.status.label("node_status"),
-            TypeSensor.name.label("sensor_name"),
-            TypeSensor.unity.label("type_sensor_unity"),
-            TypeSensor.max_.label("type_sensor_max"),
-            Sensor.latitude.label("sensor_latitude"),
-            Sensor.longitude.label("sensor_longitude"),
-            Node.latitude.label("node_latitude"),
-            Node.longitude.label("node_longitude"),
-        )
-        .join(Node, Node.wetland_id == Wetland.wetland_id)
-        .join(SensorNode, (Node.node_id == SensorNode.node_id) & (SensorNode.status == 'ACTIVE'))
-        .join(Sensor, Sensor.sensor_id == SensorNode.sensor_id)
-        .join(TypeSensor, TypeSensor.code == Sensor.type_sensor)
-        .order_by(Wetland.wetland_id)
-    )
-    
+    # 2. Consulta base
+    query = db.session.query(
+        Wetland.wetland_id,
+        Wetland.name.label("wetland_name"),
+        Wetland.location.label("wetland_location"),
+        Wetland.status.label("wetland_status"),
+        Sensor.sensor_id,
+        Sensor.name.label("name_sensor"),
+        Node.node_id,
+        Node.name.label("node_name"),
+        Node.location.label("node_location"),
+        DataHistory.value.label("data_history_value"),
+        func.timezone('America/Bogota', DataHistory.updated_at).label("last_updated"),
+        func.timezone('America/Bogota', DataHistory.register_date).label("register_date"),
+        TypeSensor.code.label("sensor_code"),
+        Node.status.label("node_status"),
+        TypeSensor.name.label("sensor_name"),
+        TypeSensor.unity.label("type_sensor_unity"),
+        TypeSensor.max_.label("type_sensor_max"),
+        Sensor.latitude.label("sensor_latitude"),
+        Sensor.longitude.label("sensor_longitude"),
+        Node.latitude.label("node_latitude"),
+        Node.longitude.label("node_longitude"),
+    ).join(Node, Node.wetland_id == Wetland.wetland_id) \
+     .join(SensorNode, (Node.node_id == SensorNode.node_id) & (SensorNode.status == 'ACTIVE')) \
+     .join(Sensor, Sensor.sensor_id == SensorNode.sensor_id) \
+     .join(TypeSensor, TypeSensor.code == Sensor.type_sensor)
+
+    # 3. Lógica de "Último Registro"
     if is_latest:
-        query = query.join(latest, latest.c.sensor_id == Sensor.sensor_id).join(DataHistory, (DataHistory.sensor_id == Sensor.sensor_id) & (DataHistory.updated_at == latest.c.latest_update))
+        # Hacemos join con la subconsulta y con DataHistory usando AMBAS llaves (ID y Fecha)
+        query = query.join(
+            latest_subquery, 
+            (latest_subquery.c.s_id == Sensor.sensor_id)
+        ).join(
+            DataHistory, 
+            (DataHistory.sensor_id == Sensor.sensor_id) & 
+            (DataHistory.register_date == latest_subquery.c.max_reg)
+        )
     else:
-        query = query.join(DataHistory, (DataHistory.sensor_id == Sensor.sensor_id))
-        
-    # Agregar filtros dinámicos según los parámetros proporcionados
-    if wetland_id is not None:
-        query = query.filter(Wetland.wetland_id == wetland_id)
-        
-    if node_id is not None:
-        query = query.filter(Node.node_id == node_id)
+        query = query.join(DataHistory, DataHistory.sensor_id == Sensor.sensor_id)
 
-    if sensor_id is not None:
-        query = query.filter(Sensor.sensor_id == sensor_id)
+    # 4. Filtros dinámicos
+    if wetland_id: query = query.filter(Wetland.wetland_id == wetland_id)
+    if node_id:    query = query.filter(Node.node_id == node_id)
+    if sensor_id:  query = query.filter(Sensor.sensor_id == sensor_id)
     
     if user_id:
-        query= query.join(UserWetland, UserWetland.wetland_id == Wetland.wetland_id).join(User,User.user_id == UserWetland.user_id).filter(User.user_id == user_id)
+        query = query.join(UserWetland, UserWetland.wetland_id == Wetland.wetland_id) \
+                     .filter(UserWetland.user_id == user_id)
 
-    return query
+    # Ordenamos para que los registros más nuevos siempre aparezcan primero
+    return query.order_by(Wetland.wetland_id, DataHistory.register_date.desc())
 
 def apply_filters_reports(query,  sort_order=None,starTime=None,endTime=None, type_sensor=None):
     
