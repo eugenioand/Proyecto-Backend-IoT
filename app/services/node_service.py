@@ -11,7 +11,6 @@ from db import db
 from app.utils.success_responses import pagination_response,created_ok_message,ok_message
 from app.utils.error.error_responses import bad_request_message, not_found_message,server_error_message
 from marshmallow import ValidationError
-from sqlalchemy import select
 node_schema = NodeSchema()
 node_schema_many = NodeSchema(many=True)
 
@@ -56,11 +55,10 @@ def get_all_node_select(text_search, wetland_id=None):
     try:
         # Subquery: nodos que tienen al menos un sensor ACTIVE
         active_node_ids = (
-        select(SensorNode.node_id)
-        .where(SensorNode.status == "ACTIVE")
-        .scalar_subquery()
-)
-        query = Node.query.filter(Node.node_id.in_(active_node_ids))
+            db.session.query(SensorNode.node_id)
+            .filter(SensorNode.status == "ACTIVE")
+            .subquery()
+        )
 
         query = Node.query.filter(Node.node_id.in_(active_node_ids))
 
