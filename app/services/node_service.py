@@ -11,6 +11,7 @@ from db import db
 from app.utils.success_responses import pagination_response,created_ok_message,ok_message
 from app.utils.error.error_responses import bad_request_message, not_found_message,server_error_message
 from marshmallow import ValidationError
+from sqlalchemy import select
 node_schema = NodeSchema()
 node_schema_many = NodeSchema(many=True)
 
@@ -51,29 +52,38 @@ def get_all_nodes(pagelink,params=None):
     except Exception as e:
         raise Exception(str(e))
 
-def get_all_node_select(text_search,wetland_id=None):
+def get_all_node_select(text_search, wetland_id=None):
     try:
-        
-        query = Node.query
+        # Subquery: nodos que tienen al menos un sensor ACTIVE
+        active_node_ids = (
+        select(SensorNode.node_id)
+        .where(SensorNode.status == "ACTIVE")
+        .scalar_subquery()
+)
+        query = Node.query.filter(Node.node_id.in_(active_node_ids))
+
+        query = Node.query.filter(Node.node_id.in_(active_node_ids))
+
         if wetland_id:
-            if not  get_wetland_by_id(wetland_id):
+            if not get_wetland_by_id(wetland_id):
                 raise ResourceNotFound("Humedal no encontrado")
-            
             query = query.filter(Node.wetland_id == wetland_id)
-        
+
         if text_search:
             search_filter = or_(
                 Node.name.ilike(f'%{text_search}%'),
                 Node.location.ilike(f'%{text_search}%')
             )
             query = query.filter(search_filter)
-        
-        query = query.with_entities(Node.node_id, Node.name).all()
-        if not query:
+
+        results = query.with_entities(Node.node_id, Node.name).all()
+
+        if not results:
             return not_found_message(message="Parece que aun no hay datos")
-        data = node_schema_many.dump(query)
-        
+
+        data = node_schema_many.dump(results)
         return ok_message(data=data)
+
     except ResourceNotFound as err:
         return not_found_message(entity="Humedal", details=str(err))
     except Exception as e:
