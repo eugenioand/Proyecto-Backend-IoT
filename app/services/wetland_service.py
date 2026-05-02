@@ -158,7 +158,7 @@ def delete_wetland(data):
 def get_wetlands_overview(user_id=None):
     # Obtenemos la query con el filtro de últimos datos activado
     query = get_wetlands_details(is_latest=True, user_id=user_id)
-
+    
     wetlands = {}
     
     for row in query:
@@ -174,22 +174,31 @@ def get_wetlands_overview(user_id=None):
                 "sensors": {},
                 "last_updated": row.register_date
             }
-        
+            
         # Actualizar la fecha global del humedal si este sensor es más reciente
         if row.register_date and (wetlands[w_id]["last_updated"] is None or 
                                   row.register_date > wetlands[w_id]["last_updated"]):
             wetlands[w_id]["last_updated"] = row.register_date
-
+            
+        
         # Agregar sensores (limitado a 3 tipos distintos por humedal)
         # Usamos el código del sensor (ej. 'PH', 'TEMP') como llave para evitar duplicados
         if row.sensor_code not in wetlands[w_id]["sensors"] and len(wetlands[w_id]["sensors"]) < 3:
-            wetlands[w_id]["sensors"][row.sensor_code] = {
-                "value": round(row.data_history_value, 2),
-                "name": row.sensor_name,
-                "unity": row.type_sensor_unity,
-                "max": row.type_sensor_max,
-                "sensor_id": row.sensor_id # Útil para depuración
-            }
+                
+                # Manejo seguro del valor: si es None o no convertible a float, asignar 0 por defecto
+                raw_val = row.data_history_value
+                try:
+                    value = round(float(raw_val), 2) if raw_val is not None else 0
+                except (TypeError, ValueError):
+                    value = 0
+
+                wetlands[w_id]["sensors"][row.sensor_code] = {
+                    "value": value,
+                    "name": row.sensor_name,
+                    "unity": row.type_sensor_unity,
+                    "max": row.type_sensor_max,
+                    "sensor_id": row.sensor_id # Útil para depuración
+                }
 
     return ok_message(data=list(wetlands.values()))
 
@@ -326,9 +335,7 @@ def get_wetlands_details(wetland_id=None, node_id=None, sensor_id=None, user_id=
     if node_id:    query = query.filter(Node.node_id == node_id)
     if sensor_id:  query = query.filter(Sensor.sensor_id == sensor_id)
     
-    if user_id:
-        query = query.join(UserWetland, UserWetland.wetland_id == Wetland.wetland_id) \
-                     .filter(UserWetland.user_id == user_id)
+    if user_id: query = query.join(UserWetland, UserWetland.wetland_id == Wetland.wetland_id).filter(UserWetland.user_id == user_id)
 
     # Ordenamos para que los registros más nuevos siempre aparezcan primero
     return query.order_by(Wetland.wetland_id, DataHistory.register_date.desc())
