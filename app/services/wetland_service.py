@@ -299,7 +299,7 @@ def get_wetlands_details(wetland_id=None, node_id=None, sensor_id=None, user_id=
         Node.node_id,
         Node.name.label("node_name"),
         Node.location.label("node_location"),
-        DataHistory.value.label("data_history_value"),
+        func.round(DataHistory.value.cast(db.Numeric), 2).label("data_history_value"),
         func.timezone('America/Bogota', DataHistory.updated_at).label("last_updated"),
         func.timezone('America/Bogota', DataHistory.register_date).label("register_date"),
         TypeSensor.code.label("sensor_code"),
